@@ -15,7 +15,7 @@ from torch.utils.data import Subset
 
 from ..data import AxionMassDataset, quantile_split, quantile_subsample
 from ..metrics import regression_metrics
-from ..models import EncoderRegressor, ResNetRegressor
+from ..models import EncoderRegressor, LensPINNRegressor, ResNetRegressor
 from .base import Task
 
 
@@ -32,7 +32,7 @@ class RegressionTask(Task):
 
     def build_datasets(self):
         c = self.config
-        dataset = AxionMassDataset(f"{c.data_root}/{c.train_dataset}", c.image_size, cache=c.cache)
+        dataset = AxionMassDataset(f"{c.data_root}/{c.train_dataset}", c.image_size, cache=c.cache, distortion=self.needs_distortion)
         train_idx, val_idx = quantile_split(dataset.targets, c.train_fraction, c.seed)
         if c.shots is not None:
             train_idx = train_idx[quantile_subsample(dataset.targets[train_idx], c.shots, c.seed)]
@@ -42,7 +42,7 @@ class RegressionTask(Task):
         return Subset(dataset, train_idx.tolist()), Subset(dataset, val_idx.tolist())
 
     def build_test_dataset(self, root: str):
-        return AxionMassDataset(root, self.config.image_size, cache=self.config.cache)
+        return AxionMassDataset(root, self.config.image_size, cache=self.config.cache, distortion=self.needs_distortion)
 
     def build_head(self, encoder: nn.Module) -> nn.Module:
         return EncoderRegressor(encoder)
@@ -50,6 +50,8 @@ class RegressionTask(Task):
     def build_baseline(self, name: str) -> nn.Module:
         if name == "resnet18":
             return ResNetRegressor()
+        if name == "lenspinn":
+            return LensPINNRegressor()
         return super().build_baseline(name)
 
     def loss(self, output, batch):

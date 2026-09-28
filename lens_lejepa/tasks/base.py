@@ -20,7 +20,7 @@ from torch import nn
 from torch.utils.data import Dataset
 
 from ..config import FinetuneConfig
-from ..models import canonical_adapter_name, inject_adapters, load_pretrained_encoder
+from ..models import NEEDS_DISTORTION, canonical_adapter_name, inject_adapters, is_encoder, load_pretrained_encoder
 
 
 class Task(ABC):
@@ -51,7 +51,7 @@ class Task(ABC):
     def build_model(self) -> nn.Module:
         """Backbone + head, with the requested adaptation applied."""
         c = self.config
-        if not c.backbone.startswith("vit"):
+        if not is_encoder(c.backbone):
             return self.build_baseline(c.backbone)
         encoder = load_pretrained_encoder(c.backbone, c.image_size, c.patch_size, c.pretrained)
         if c.adaptation == "full":
@@ -62,8 +62,16 @@ class Task(ABC):
             inject_adapters(encoder, canonical_adapter_name(c.adaptation), c.rank, c.alpha, c.dropout, c.rank_schedule)
         return self.build_head(encoder)
 
-    def model_input(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
-        return batch["image"]
+    @property
+    def needs_distortion(self) -> bool:
+        """Lensiformer and LensPINN also read the lensing distortion map."""
+        return self.config.backbone in NEEDS_DISTORTION
+
+    def model_input(self, batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, ...]:
+        """Positional arguments for ``model(...)``."""
+        if self.needs_distortion:
+            return batch["image"], batch["distortion"]
+        return (batch["image"],)
 
     # ---- optimisation and evaluation ---------------------------------------
     @abstractmethod

@@ -4,6 +4,7 @@
 #   2. classification: Model II at 100/500/1000/5000/full labels per class + Model III full
 #   3. adapter ablation on the Lens-LeJEPA encoder
 #   4. axion mass regression and synthetic 2x super-resolution on Models II and III
+#   5. baselines: supervised models and the 300-epoch I-JEPA / Lens-JEPA reference encoders
 # Usage: scripts/reproduce_paper.sh [extra --set overrides, e.g. device=cuda:1]
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -46,8 +47,11 @@ for data in Model_II Model_III; do
       --set pretrained=$LENS adaptation=rslora train_dataset=$data test_dataset=${data}_test run_name=lens_lejepa_rslora_$data "${EXTRA[@]}"
   $PY -m lens_lejepa finetune --config configs/downstream/regression.yaml \
       --set pretrained=$CTRL adaptation=lora train_dataset=$data test_dataset=${data}_test run_name=lejepa_lora_$data "${EXTRA[@]}"
-  $PY -m lens_lejepa finetune --config configs/downstream/supervised_resnet18.yaml \
-      --set task=regression batch_size=128 train_dataset=$data test_dataset=${data}_test run_name=resnet18_$data "${EXTRA[@]}"
+  for baseline in resnet18 lenspinn; do
+    $PY -m lens_lejepa finetune --config configs/downstream/supervised.yaml \
+        --set task=regression backbone=$baseline weight_decay=0.01 label_smoothing=0.0 \
+              train_dataset=$data test_dataset=${data}_test run_name=${baseline}_regression_$data "${EXTRA[@]}"
+  done
   for pair in "$LENS lens_lejepa" "$CTRL lejepa"; do
     set -- $pair
     $PY -m lens_lejepa finetune --config configs/downstream/super_resolution.yaml \
@@ -57,6 +61,27 @@ for data in Model_II Model_III; do
     $PY -m lens_lejepa finetune --config configs/downstream/super_resolution.yaml \
         --set backbone=$baseline train_dataset=$data test_dataset=${data}_test run_name=${baseline}_$data "${EXTRA[@]}"
   done
+done
+
+# Supervised classification baselines (Table 7).
+for baseline in resnet18 vit vitsd lensiformer lenspinn; do
+  for shots in 100 500 1000 5000 null; do
+    $PY -m lens_lejepa finetune --config configs/downstream/supervised.yaml \
+        --set backbone=$baseline shots=$shots run_name=${baseline}_shots${shots} "${EXTRA[@]}"
+  done
+  $PY -m lens_lejepa finetune --config configs/downstream/supervised.yaml \
+      --set backbone=$baseline train_dataset=Model_III test_dataset=Model_III_test run_name=${baseline}_model_iii "${EXTRA[@]}"
+done
+
+# Reference self-supervised encoders at 3x the pretraining budget, adapted with LoRA r=32.
+for method in ijepa lens_jepa lens_jepa_sym; do
+  ckpt=runs/pretrain/$method/${method}_model_i_seed42/last_pretrain.pt
+  [ -f "$ckpt" ] || $PY -m lens_lejepa pretrain --config configs/pretrain/$method.yaml --set "${EXTRA[@]}"
+  backbone=lens_jepa; [ "$method" = ijepa ] && backbone=vit_base_3blocks
+  for shots in 100 500 1000 5000 null; do
+    cls backbone=$backbone pretrained=$ckpt adaptation=lora shots=$shots run_name=${method}_lora_shots${shots}
+  done
+  cls backbone=$backbone pretrained=$ckpt adaptation=lora train_dataset=Model_III test_dataset=Model_III_test run_name=${method}_lora_model_iii
 done
 
 $PY scripts/collect_results.py runs

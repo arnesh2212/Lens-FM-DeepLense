@@ -42,13 +42,23 @@ def test_objective_backpropagates(use_priors):
     assert vit.patch_embed.proj.weight.grad is not None
 
 
-def _pretrain_config(root, out, method="lens_lejepa"):
+def _pretrain_config(root, out, method="lens_lejepa", encoder="vit_tiny"):
     return PretrainConfig(
-        method=method, data_root=str(root.parent), dataset=root.name, image_size=32, encoder="vit_tiny",
+        method=method, data_root=str(root.parent), dataset=root.name, image_size=32, encoder=encoder,
         projector_dim=16, epochs=2, batch_size=12, warmup_epochs=1, workers=0, device="cpu",
         output_dir=str(out), run_name="t", collapse_patience=100,
-        objective={"sigreg_slices": 16},
+        objective={"sigreg_slices": 16}, masked={"predictor_dim": 48, "predictor_depth": 1, "npred": 1, "pred_scale": [0.25, 0.25]},
     )
+
+
+@pytest.mark.parametrize("method,encoder", [("ijepa", "vit_tiny"), ("lens_jepa", "lens_jepa"), ("lens_jepa_sym", "lens_jepa"), ("lens_jepa_focus", "lens_jepa")])
+def test_masked_reference_pretraining(fake_root, tmp_path, method, encoder):
+    run = pretrain(_pretrain_config(fake_root, tmp_path, method, encoder))
+    state = torch.load(run / "last_pretrain.pt", weights_only=False)
+    assert state["epoch"] == 2 and "teacher" in state
+    config = _pretrain_config(fake_root, tmp_path, method, encoder)
+    config.epochs = 3
+    assert torch.load(pretrain(config, resume=run / "last_pretrain.pt") / "last_pretrain.pt", weights_only=False)["epoch"] == 3
 
 
 def test_pretrain_and_resume(fake_root, tmp_path):
@@ -68,18 +78,31 @@ def test_pretrain_and_resume(fake_root, tmp_path):
         ("classification", "vit_tiny", "rslora"),
         ("classification", "vit_tiny", "full"),
         ("classification", "resnet18", "rslora"),
+        ("classification", "vit", "rslora"),
+        ("classification", "vitsd", "rslora"),
+        ("classification", "lensiformer", "rslora"),
+        ("classification", "lenspinn", "rslora"),
+        ("regression", "lenspinn", "rslora"),
+        ("classification", "lens_jepa", "lora"),
         ("regression", "vit_tiny", "loraplus"),
         ("super_resolution", "vit_tiny", "lora"),
         ("super_resolution", "rcan", "lora"),
+        ("super_resolution", "edsr", "lora"),
+        ("super_resolution", "srresnet", "lora"),
+        ("super_resolution", "fsrcnn", "lora"),
+        ("super_resolution", "rdn", "lora"),
         ("super_resolution", "bicubic", "lora"),
     ],
 )
 def test_finetune_and_evaluate(fake_root, tmp_path, task, backbone, adaptation):
-    ssl_run = pretrain(_pretrain_config(fake_root, tmp_path / "ssl"))
+    from lens_lejepa.models import is_encoder
+
+    method = "lens_jepa" if backbone == "lens_jepa" else "lens_lejepa"
+    ssl_run = pretrain(_pretrain_config(fake_root, tmp_path / "ssl", method, backbone if backbone == "lens_jepa" else "vit_tiny"))
     config = FinetuneConfig(
         task=task, data_root=str(fake_root.parent), train_dataset=fake_root.name, test_dataset=fake_root.name,
         image_size=32, backbone=backbone, adaptation=adaptation, rank=4, alpha=8,
-        pretrained=str(ssl_run / "last_pretrain.pt") if backbone.startswith("vit") else None,
+        pretrained=str(ssl_run / "last_pretrain.pt") if is_encoder(backbone) else None,
         epochs=2, batch_size=8, val_interval=1, workers=0, device="cpu", output_dir=str(tmp_path), run_name="t",
     )
     run = finetune(config)

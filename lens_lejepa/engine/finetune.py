@@ -19,7 +19,7 @@ from tqdm import tqdm
 
 from ..config import FinetuneConfig, config_to_dict
 from ..data import make_loader
-from ..models import adapter_param_groups, count_parameters
+from ..models import adapter_param_groups, count_parameters, is_encoder
 from ..tasks import Task, build_task
 from ..utils import append_csv, check_finite, logger, make_run_dir, resolve_device, set_seed, write_json
 
@@ -29,7 +29,7 @@ def _autocast(config: FinetuneConfig, device: torch.device):
 
 
 def _optimizer(model: nn.Module, config: FinetuneConfig) -> torch.optim.Optimizer:
-    uses_adapter = config.backbone.startswith("vit") and config.adaptation not in ("full", "linear_probe")
+    uses_adapter = is_encoder(config.backbone) and config.adaptation not in ("full", "linear_probe")
     if uses_adapter:
         groups = adapter_param_groups(model, config.lr, config.weight_decay, config.adaptation, config.loraplus_ratio)
     else:
@@ -44,7 +44,7 @@ def run_inference(task: Task, model: nn.Module, loader, device: torch.device) ->
     collected: dict[str, list[np.ndarray]] = {}
     for batch in loader:
         batch = {key: value.to(device, non_blocking=True) for key, value in batch.items()}
-        output = model(task.model_input(batch))  # full precision: metrics must not depend on bf16 rounding
+        output = model(*task.model_input(batch))  # full precision: metrics must not depend on bf16 rounding
         check_finite("model output", output)
         for key, value in task.collect(output, batch).items():
             collected.setdefault(key, []).append(value)
@@ -86,7 +86,7 @@ def finetune(config: FinetuneConfig) -> Path:
     device = resolve_device(config.device)
     task = build_task(config)
     shots = "full" if config.shots is None else f"shots{config.shots}"
-    tag = config.adaptation if config.backbone.startswith("vit") else "scratch"
+    tag = config.adaptation if is_encoder(config.backbone) else "scratch"
     run_dir = make_run_dir(config.output_dir, f"{config.task}/{config.backbone}_{tag}", config.run_name or f"{config.train_dataset}_{shots}_seed{config.seed}")
     write_json(run_dir / "config.json", config_to_dict(config))
 
@@ -115,7 +115,7 @@ def finetune(config: FinetuneConfig) -> Path:
                     break
                 batch = {key: value.to(device, non_blocking=True) for key, value in batch.items()}
                 with _autocast(config, device):
-                    loss = task.loss(model(task.model_input(batch)), batch)
+                    loss = task.loss(model(*task.model_input(batch)), batch)
                 check_finite("training loss", loss)
                 (loss / config.grad_accum).backward()
                 if step % config.grad_accum == 0 or step == steps:

@@ -15,7 +15,7 @@ from torch.utils.data import Subset
 
 from ..data import SyntheticSuperResolutionDataset, few_shot_split, stratified_split
 from ..metrics import ssim, super_resolution_metrics
-from ..models import RCAN, Bicubic, PatchSuperResolution
+from ..models import EDSR, FSRCNN, RCAN, RDN, Bicubic, PatchSuperResolution, SRResNet, is_encoder
 from .base import Task
 
 
@@ -49,14 +49,15 @@ class SuperResolutionTask(Task):
         return PatchSuperResolution(encoder, self.config.image_size, self.config.patch_size, self.hr_size)
 
     def build_baseline(self, name: str) -> nn.Module:
-        if name == "rcan":
-            return RCAN()
+        baselines = {"rcan": RCAN, "edsr": EDSR, "rdn": RDN, "srresnet": SRResNet, "fsrcnn": FSRCNN}
+        if name in baselines:
+            return baselines[name]()
         if name == "bicubic":
             return Bicubic(self.hr_size)
         return super().build_baseline(name)
 
     def model_input(self, batch):
-        return batch["encoder_input"] if self.config.backbone.startswith("vit") else batch["low_res"]
+        return (batch["encoder_input"] if is_encoder(self.config.backbone) else batch["low_res"],)
 
     def loss(self, output, batch):
         return charbonnier_ssim_loss(output.float(), batch["high_res"].float())

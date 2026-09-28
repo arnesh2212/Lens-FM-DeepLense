@@ -157,9 +157,12 @@ def inject_adapters(
     if method == "layerwise" and not rank_schedule:
         raise ValueError("The layerwise adapter needs a rank_schedule, e.g. [8, 16, 32, 64].")
     encoder.requires_grad_(False)
+    # Linear layers inside nn.MultiheadAttention (out_proj) are left alone:
+    # the fused attention kernel reads their weights directly.
     targets = [
         (f"{parent_name}.{child_name}".lstrip("."), parent, child_name, child)
         for parent_name, parent in list(encoder.named_modules())
+        if not isinstance(parent, nn.MultiheadAttention)
         for child_name, child in list(parent.named_children())
         if isinstance(child, nn.Linear)
     ]

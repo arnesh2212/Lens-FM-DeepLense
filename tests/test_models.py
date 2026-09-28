@@ -53,3 +53,35 @@ def test_patch_super_resolution_output():
     out = PatchSuperResolution(vit, 32, 16, output_size=64)(torch.randn(3, 1, 32, 32))
     assert out.shape == (3, 1, 64, 64)
     assert out.min() >= 0 and out.max() <= 1
+
+
+@pytest.mark.parametrize("name", ["vit", "vitsd"])
+def test_supervised_vits(name):
+    from lens_lejepa.models import SupervisedViT
+
+    model = SupervisedViT(32, 16, 3, dim=64, heads=2, mlp_dim=64, shifted_patches=name == "vitsd")
+    assert model(torch.randn(2, 1, 32, 32)).shape == (2, 3)
+
+
+def test_lensiformer_and_lenspinn():
+    from lens_lejepa.models import Lensiformer, LensPINN, LensPINNRegressor
+
+    images, distortion = torch.randn(2, 1, 32, 32), torch.rand(2, 1, 32, 32)
+    probabilities, source = Lensiformer(32, 16, embed_dim=32, num_heads=2).forward_with_source(images, distortion)
+    assert probabilities.shape == (2, 3) and torch.allclose(probabilities.sum(1), torch.ones(2), atol=1e-5)
+    assert source.shape == (2, 1, 32, 32)
+    assert LensPINN()(images, distortion).shape == (2, 3)
+    assert LensPINNRegressor()(images, distortion).shape == (2,)
+
+
+def test_lens_jepa_encoder_and_masks():
+    from lens_lejepa.models import BlockMaskCollator, JEPAPredictor, LensJEPAEncoder, MaskConfig
+
+    encoder = LensJEPAEncoder(32, 16)
+    assert count_parameters(LensJEPAEncoder(160, 16)) == 2_454_018  # the 2.45M reference backbone
+    collator = BlockMaskCollator(MaskConfig(grid_size=2, npred=1, pred_scale=(0.25, 0.25)))
+    images, masks_enc, masks_pred = collator([{"image": torch.randn(1, 32, 32)} for _ in range(3)])
+    assert not set(masks_enc[0][0].tolist()) & set(masks_pred[0][0].tolist())  # no target leaks into context
+    context = encoder(images, masks_enc)
+    predicted = JEPAPredictor(4, encoder.embed_dim, 32, depth=1, num_heads=2)(context, masks_enc, masks_pred)
+    assert predicted.shape == (3, masks_pred[0].shape[1], encoder.embed_dim)

@@ -17,6 +17,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from .masking import apply_masks, repeat_interleave_batch
+
 
 def sincos_2d_position_embedding(dim: int, grid_size: int) -> np.ndarray:
     """Fixed 2-D sine-cosine position embedding, ``[grid_size**2, dim]``."""
@@ -129,8 +131,11 @@ class VisionTransformer(nn.Module):
             block.attn.proj.weight.data.div_(math.sqrt(2.0 * layer_id))
             block.mlp.fc2.weight.data.div_(math.sqrt(2.0 * layer_id))
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, masks: list[torch.Tensor] | None = None) -> torch.Tensor:
+        """Patch tokens ``[B, N, D]``; with I-JEPA ``masks``, only the kept tokens."""
         x = self.patch_embed(x) + self.pos_embed
+        if masks is not None:
+            x = apply_masks(x, masks if isinstance(masks, list) else [masks])
         for block in self.blocks:
             x = block(x)
         return self.norm(x)
@@ -140,6 +145,8 @@ VIT_CONFIGS: dict[str, dict[str, int]] = {
     "vit_tiny": {"embed_dim": 192, "depth": 12, "num_heads": 3},
     "vit_small": {"embed_dim": 384, "depth": 12, "num_heads": 6},
     "vit_base": {"embed_dim": 768, "depth": 12, "num_heads": 12},
+    # The wide 3-block encoder used by the 300-epoch I-JEPA reference run (21.5M parameters).
+    "vit_base_3blocks": {"embed_dim": 768, "depth": 3, "num_heads": 12},
 }
 
 
@@ -147,3 +154,46 @@ def build_vit(name: str, img_size: int, patch_size: int) -> VisionTransformer:
     if name not in VIT_CONFIGS:
         raise ValueError(f"Unknown ViT {name!r}; choose from {sorted(VIT_CONFIGS)}.")
     return VisionTransformer(img_size=img_size, patch_size=patch_size, **VIT_CONFIGS[name])
+
+
+class JEPAPredictor(nn.Module):
+    """I-JEPA predictor: a narrow ViT that fills in target tokens from context tokens."""
+
+    def __init__(self, num_patches: int, embed_dim: int, predictor_dim: int = 384, depth: int = 6, num_heads: int = 12, init_std: float = 0.02) -> None:
+        super().__init__()
+        norm_layer = partial(nn.LayerNorm, eps=1e-6)
+        self.predictor_embed = nn.Linear(embed_dim, predictor_dim)
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, predictor_dim))
+        position = sincos_2d_position_embedding(predictor_dim, int(num_patches**0.5))
+        self.predictor_pos_embed = nn.Parameter(torch.from_numpy(position).float().unsqueeze(0), requires_grad=False)
+        self.predictor_blocks = nn.ModuleList([Block(predictor_dim, num_heads, 4.0, norm_layer) for _ in range(depth)])
+        self.predictor_norm = norm_layer(predictor_dim)
+        self.predictor_proj = nn.Linear(predictor_dim, embed_dim)
+        self.init_std = init_std
+        nn.init.trunc_normal_(self.mask_token, std=init_std, a=-2.0, b=2.0)
+        self.apply(self._init_weights)
+        for layer_id, block in enumerate(self.predictor_blocks, start=1):
+            block.attn.proj.weight.data.div_(math.sqrt(2.0 * layer_id))
+            block.mlp.fc2.weight.data.div_(math.sqrt(2.0 * layer_id))
+
+    def _init_weights(self, module: nn.Module) -> None:
+        if isinstance(module, nn.Linear):
+            nn.init.trunc_normal_(module.weight, std=self.init_std, a=-2.0, b=2.0)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.LayerNorm):
+            nn.init.ones_(module.weight)
+            nn.init.zeros_(module.bias)
+
+    def forward(self, context: torch.Tensor, masks_enc: list[torch.Tensor], masks_pred: list[torch.Tensor]) -> torch.Tensor:
+        batch = len(context) // len(masks_enc)
+        x = self.predictor_embed(context)
+        x = x + apply_masks(self.predictor_pos_embed.repeat(batch, 1, 1), masks_enc)
+        n_context = x.shape[1]
+        target_pos = apply_masks(self.predictor_pos_embed.repeat(batch, 1, 1), masks_pred)
+        target_pos = repeat_interleave_batch(target_pos, batch, repeat=len(masks_enc))
+        targets = self.mask_token.repeat(target_pos.shape[0], target_pos.shape[1], 1) + target_pos
+        x = torch.cat([x.repeat(len(masks_pred), 1, 1), targets], dim=1)
+        for block in self.predictor_blocks:
+            x = block(x)
+        return self.predictor_proj(self.predictor_norm(x)[:, n_context:])

@@ -17,7 +17,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from .io import bicubic, load_axion_image_and_log_mass, load_lens_image, minmax_normalise, to_model_tensor
+from .io import bicubic, distortion_map, load_axion_image_and_log_mass, load_lens_image, minmax_normalise, to_model_tensor
 
 CLASSES: tuple[str, ...] = ("axion", "cdm", "no_sub")
 
@@ -64,9 +64,10 @@ class UnlabelledLensDataset(Dataset):
 class LensClassificationDataset(Dataset):
     """Three-class substructure classification (axion / CDM / no substructure)."""
 
-    def __init__(self, root: str | Path, image_size: int, cache: bool = False) -> None:
+    def __init__(self, root: str | Path, image_size: int, cache: bool = False, distortion: bool = False) -> None:
         self.paths, self.labels = list_class_files(root)
         self.image_size = image_size
+        self.distortion = distortion
         self._cache = [load_lens_image(path) for path in self.paths] if cache else None
 
     def __len__(self) -> int:
@@ -74,21 +75,25 @@ class LensClassificationDataset(Dataset):
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
         image = self._cache[index] if self._cache is not None else load_lens_image(self.paths[index])
-        return {
+        item = {
             "image": to_model_tensor(image, self.image_size, standardize=True),
             "label": torch.tensor(self.labels[index], dtype=torch.long),
         }
+        if self.distortion:
+            item["distortion"] = distortion_map(image, self.image_size)
+        return item
 
 
 class AxionMassDataset(Dataset):
     """Axion images only, with target ``log10(m_axion / eV)``."""
 
-    def __init__(self, root: str | Path, image_size: int, cache: bool = False) -> None:
+    def __init__(self, root: str | Path, image_size: int, cache: bool = False, distortion: bool = False) -> None:
         folder = Path(root) / "axion"
         self.paths = sorted(folder.glob("*.npy"))
         if not self.paths:
             raise RuntimeError(f"No axion .npy files found under {folder}")
         self.image_size = image_size
+        self.distortion = distortion
         records = [load_axion_image_and_log_mass(path) for path in self.paths]
         self.targets = np.asarray([target for _, target in records], dtype=np.float32)
         self._cache = [image for image, _ in records] if cache else None
@@ -101,10 +106,13 @@ class AxionMassDataset(Dataset):
             image = self._cache[index]
         else:
             image, _ = load_axion_image_and_log_mass(self.paths[index])
-        return {
+        item = {
             "image": to_model_tensor(image, self.image_size, standardize=True),
             "target": torch.tensor(self.targets[index], dtype=torch.float32),
         }
+        if self.distortion:
+            item["distortion"] = distortion_map(image, self.image_size)
+        return item
 
 
 class SyntheticSuperResolutionDataset(Dataset):

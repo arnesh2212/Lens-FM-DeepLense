@@ -14,6 +14,7 @@ from typing import Any, TypeVar
 
 import yaml
 
+from .ssl.masked_jepa import MASKED_METHODS, MaskedJEPAConfig
 from .ssl.objective import ObjectiveConfig
 
 
@@ -21,14 +22,14 @@ from .ssl.objective import ObjectiveConfig
 class PretrainConfig:
     """Self-supervised pretraining on unlabelled images (Model I in the paper)."""
 
-    method: str = "lens_lejepa"            # lens_lejepa | lejepa
+    method: str = "lens_lejepa"            # lens_lejepa | lejepa | ijepa | lens_jepa | lens_jepa_sym | lens_jepa_focus
     data_root: str = "../datasets"
     dataset: str = "Model_I"
     max_samples: int | None = None
     image_size: int = 160
     patch_size: int = 16
-    encoder: str = "vit_small"
-    projector_dim: int = 256
+    encoder: str = "vit_small"             # vit_small | vit_base_3blocks | lens_jepa | ...
+    projector_dim: int = 256               # LeJEPA methods only
     epochs: int = 100
     batch_size: int = 128
     lr: float = 5e-4
@@ -37,7 +38,8 @@ class PretrainConfig:
     warmup_epochs: int = 10
     weight_decay: float = 0.05
     final_weight_decay: float = 0.05
-    objective: ObjectiveConfig = field(default_factory=ObjectiveConfig)
+    objective: ObjectiveConfig = field(default_factory=ObjectiveConfig)      # lens_lejepa / lejepa
+    masked: MaskedJEPAConfig = field(default_factory=MaskedJEPAConfig)      # masked-prediction references
     # A run is rejected if pooled features stay collapsed this many epochs.
     collapse_std_threshold: float = 0.02
     collapse_rank_threshold: float = 0.04
@@ -51,11 +53,17 @@ class PretrainConfig:
     max_steps_per_epoch: int | None = None  # for quick smoke tests only
 
     def __post_init__(self) -> None:
-        if self.method not in ("lens_lejepa", "lejepa"):
-            raise ValueError("method must be 'lens_lejepa' or 'lejepa'.")
+        if self.method not in ("lens_lejepa", "lejepa", *MASKED_METHODS):
+            raise ValueError(f"Unknown method {self.method!r}.")
         if isinstance(self.objective, dict):
             self.objective = ObjectiveConfig(**self.objective)
+        if isinstance(self.masked, dict):
+            self.masked = MaskedJEPAConfig(**self.masked)
         self.objective.use_lens_priors = self.method == "lens_lejepa"
+
+    @property
+    def is_masked(self) -> bool:
+        return self.method in MASKED_METHODS
 
 
 @dataclass
@@ -73,9 +81,10 @@ class FinetuneConfig:
     image_size: int = 160
     patch_size: int = 16
     # Backbone: a ViT (optionally from a pretraining checkpoint) or a baseline.
-    backbone: str = "vit_small"            # vit_small | vit_tiny | vit_base | resnet18 | rcan | bicubic
+    backbone: str = "vit_small"            # encoder: vit_small | vit_tiny | vit_base | vit_base_3blocks | lens_jepa
+                                           # or a baseline: resnet18 | vit | vitsd | lensiformer | lenspinn | rcan | bicubic
     pretrained: str | None = None          # path to last_pretrain.pt
-    adaptation: str = "rslora"             # an adapter name, "full" or "linear_probe" (ViT backbones only)
+    adaptation: str = "rslora"             # an adapter name, "full" or "linear_probe" (encoder backbones only)
     rank: int = 32
     alpha: float = 64.0
     dropout: float = 0.0

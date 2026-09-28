@@ -10,7 +10,7 @@ from torch.utils.data import Subset
 
 from ..data import CLASSES, LensClassificationDataset, few_shot_split, stratified_split
 from ..metrics import classification_metrics
-from ..models import EncoderClassifier, build_resnet18
+from ..models import EncoderClassifier, Lensiformer, LensPINN, SupervisedViT, build_resnet18
 from .base import Task
 
 
@@ -23,7 +23,7 @@ class ClassificationTask(Task):
 
     def build_datasets(self):
         c = self.config
-        dataset = LensClassificationDataset(f"{c.data_root}/{c.train_dataset}", c.image_size, cache=c.cache)
+        dataset = LensClassificationDataset(f"{c.data_root}/{c.train_dataset}", c.image_size, cache=c.cache, distortion=self.needs_distortion)
         if c.shots is None:
             train_idx, val_idx = stratified_split(dataset.labels, c.train_fraction, c.seed)
         else:
@@ -31,14 +31,22 @@ class ClassificationTask(Task):
         return Subset(dataset, train_idx.tolist()), Subset(dataset, val_idx.tolist())
 
     def build_test_dataset(self, root: str):
-        return LensClassificationDataset(root, self.config.image_size, cache=self.config.cache)
+        return LensClassificationDataset(root, self.config.image_size, cache=self.config.cache, distortion=self.needs_distortion)
 
     def build_head(self, encoder: nn.Module) -> nn.Module:
         return EncoderClassifier(encoder, num_classes=len(CLASSES))
 
     def build_baseline(self, name: str) -> nn.Module:
-        if name == "resnet18":
-            return build_resnet18(len(CLASSES))
+        c, k = self.config, len(CLASSES)
+        baselines = {
+            "resnet18": lambda: build_resnet18(k),
+            "vit": lambda: SupervisedViT(c.image_size, c.patch_size, k),
+            "vitsd": lambda: SupervisedViT(c.image_size, c.patch_size, k, shifted_patches=True),
+            "lensiformer": lambda: Lensiformer(c.image_size, c.patch_size, num_classes=k),
+            "lenspinn": lambda: LensPINN(num_classes=k),
+        }
+        if name in baselines:
+            return baselines[name]()
         return super().build_baseline(name)
 
     def loss(self, output, batch):

@@ -103,3 +103,24 @@ def bicubic(images: torch.Tensor, size: int, antialias: bool = False) -> torch.T
     batched = images if images.ndim == 4 else images.unsqueeze(0)
     out = F.interpolate(batched, size=(size, size), mode="bicubic", align_corners=False, antialias=antialias)
     return out if images.ndim == 4 else out.squeeze(0)
+
+
+def distortion_map(image: np.ndarray, size: int) -> torch.Tensor:
+    """Label-free lensing distortion map used by Lensiformer and LensPINN.
+
+    ``|tanh(d²/dxdy [log(I_max / I)]²)|`` of the raw image (shifted to be
+    non-negative), resized to ``size x size``. Values lie in ``[0, 1]``.
+    """
+    image = np.asarray(image, dtype=np.float32)
+    if image.ndim == 3:
+        image = image.mean(axis=0)
+    finite = np.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0)
+    shifted = finite - float(finite.min())
+    eps = 1e-8
+    log_ratio = np.square(np.log((float(shifted.max()) + eps) / (shifted + eps)))
+    curvature = np.gradient(np.gradient(log_ratio, axis=0), axis=1)
+    result = np.nan_to_num(np.abs(np.tanh(curvature)), nan=0.0, posinf=1.0, neginf=0.0)
+    tensor = torch.from_numpy(result.astype(np.float32)).unsqueeze(0)
+    if tensor.shape[-2:] != (size, size):
+        tensor = resize(tensor, [size, size], antialias=True)
+    return tensor

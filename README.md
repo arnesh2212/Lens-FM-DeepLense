@@ -54,7 +54,7 @@ Loading the original checkpoints into this code reproduces these held-out number
 ```bash
 git clone https://github.com/arnesh2212/Lens-FM-DeepLense.git lens-lejepa && cd lens-lejepa
 pip install -e ".[dev]"          # or: pip install -r requirements.txt
-pytest                           # 63 tests, CPU only, ~10 s
+pytest                           # 77 tests, CPU only, ~15 s
 ```
 
 Python ≥ 3.10 and PyTorch ≥ 2.1. Everything runs on a single GPU; the paper used one RTX A4500 (20 GB).
@@ -126,12 +126,45 @@ training images per class and `N/4` validation images per class, drawn from the 
 uses a split stratified by mass decile, and `shots` counts axion images. The official `*_test` folders are used only
 for the final evaluation of the selected checkpoint.
 
-**Backbones and adaptation.** `backbone: vit_small` (default, loads `pretrained`), `vit_tiny`, `vit_base`, or the
-from-scratch baselines `resnet18` (classification, regression), `rcan` and `bicubic` (super-resolution). For ViT
-backbones `adaptation` is one of `lora`, `rslora`, `dora`, `loraplus`, `gated`, `loha`, `layerwise`, `full` or
-`linear_probe`. At rank 32 on ViT-S/16, `lora`/`rslora` train 2.36M parameters (48 adapted layers).
+**Backbones and adaptation.** `backbone` is either a self-supervised encoder, which loads `pretrained` and is
+adapted with `adaptation` (`lora`, `rslora`, `dora`, `loraplus`, `gated`, `loha`, `layerwise`, `full` or
+`linear_probe`), or a baseline trained from scratch. At rank 32 on ViT-S/16, `lora`/`rslora` train 2.36M parameters
+(48 adapted layers).
 
 To add a task, see [docs/ADDING_A_TASK.md](docs/ADDING_A_TASK.md).
+
+## Baselines
+
+Every model in the paper's tables is implemented here. Parameter names match the original experiment code, and
+loading the original checkpoints reproduces the reported held-out numbers.
+
+| `backbone` | Type | Tasks | Paper Model II accuracy → this code |
+|---|---|---|---|
+| `resnet18` | supervised CNN | classification, regression | 0.9999 → 0.9999 |
+| `vit` | supervised ViT (2 blocks, 1024-d) | classification | 0.9397 → 0.9397 |
+| `vitsd` | supervised ViT with shifted patches + locality attention | classification | 0.8960 → 0.8960 |
+| `lensiformer` | supervised physics-informed ViT (image + distortion map) | classification | 0.9820 → 0.9821 |
+| `lenspinn` | supervised physics-informed CNN (image + distortion map) | classification, regression | 0.9997 → 0.9997 |
+| `rcan` | supervised 2x super-resolution CNN | super-resolution | see note below |
+| `bicubic` | interpolation | super-resolution | 41.07 dB → 41.07 dB |
+| `vit_base_3blocks` | I-JEPA reference encoder (21.5M), `method: ijepa` | all (with adapters) | 0.9780 → 0.9780 (LoRA) |
+| `lens_jepa` | Lens-JEPA reference encoder (2.45M), `method: lens_jepa`, `lens_jepa_sym`, `lens_jepa_focus` | all (with adapters) | 0.8298 → 0.8309, Sym 0.8660 → 0.8670 (LoRA) |
+
+```bash
+# supervised baselines
+python -m lens_lejepa finetune --config configs/downstream/supervised.yaml --set backbone=lensiformer
+python -m lens_lejepa finetune --config configs/downstream/supervised.yaml --set backbone=lenspinn task=regression weight_decay=0.01 label_smoothing=0.0
+
+# reference encoders: masked latent prediction with an EMA teacher, 300 epochs
+python -m lens_lejepa pretrain --config configs/pretrain/ijepa.yaml
+python -m lens_lejepa pretrain --config configs/pretrain/lens_jepa_sym.yaml
+python -m lens_lejepa finetune --config configs/downstream/classification.yaml \
+    --set backbone=lens_jepa adaptation=lora pretrained=runs/pretrain/lens_jepa_sym/lens_jepa_sym_model_i_seed42/last_pretrain.pt
+```
+
+Lensiformer and the Lens-JEPA encoder invert the lens with scatter operations; when several pixels land on the same
+source pixel the GPU result is not deterministic, so two evaluations of the *same* checkpoint differ on about 2% of
+images. That is why these three rows differ from the paper by 0.1 points.
 
 ## Repository layout
 
@@ -141,8 +174,8 @@ lens_lejepa/
 ├── cli.py               python -m lens_lejepa {pretrain, finetune, evaluate, tasks}
 ├── metrics.py           classification / regression / super-resolution metrics
 ├── data/                io.py (npy loading, preprocessing), datasets.py, splits.py
-├── models/              vit.py, heads.py, adapters.py, baselines.py
-├── ssl/                 sigreg.py, views.py, lens_priors.py, objective.py, diagnostics.py
+├── models/              vit.py, lens_jepa.py, masking.py, heads.py, adapters.py, supervised.py, baselines.py
+├── ssl/                 sigreg.py, views.py, lens_priors.py, objective.py, masked_jepa.py, diagnostics.py
 ├── tasks/               base.py (the Task interface), classification.py, regression.py, super_resolution.py
 └── engine/              pretrain.py, finetune.py (training, model selection, evaluation)
 configs/                 pretrain/*.yaml, downstream/*.yaml
@@ -166,8 +199,10 @@ tests/                   unit and end-to-end tests
   (the original used directory order, so train/validation membership could differ between machines; test sets are
   unaffected), SSIM is averaged per image rather than per batch, attention uses
   `scaled_dot_product_attention` (outputs agree to ~1e-5), and multi-GPU SIGReg reduction was removed (single-GPU only).
-* **Not included.** Lensiformer, LensPINN and the supervised ViT variants come from the DeepLense repository and are
-  not re-implemented here.
+* **RCAN.** An earlier version of the RCAN baseline ended in a sigmoid. On these mostly-black images it saturated
+  within about ten steps, its gradient became exactly zero, and the network was stuck predicting a black image
+  (19.5 dB). The output layer is now linear, as in the original RCAN, and predictions are clamped to `[0, 1]` at
+  evaluation.
 
 ## Citation
 
