@@ -66,3 +66,13 @@ def test_quantile_split_covers_range():
     assert values[val].min() < -23.7 and values[val].max() > -22.3
     subset = quantile_subsample(values, 100, seed=0)
     assert len(subset) == len(set(subset)) == 100
+
+
+def test_shift_image_and_training_jitter(fake_root):
+    from lens_lejepa.data.io import shift_image
+
+    image = np.arange(16, dtype=np.float32).reshape(1, 4, 4)
+    shifted = shift_image(image, 1, -1)
+    assert shifted[0, 1, 0] == image[0, 0, 1] and shifted[0, 0, 0] == image.min()
+    jittered = LensClassificationDataset(fake_root, 32, jitter=2)
+    assert jittered[0]["image"].shape == (1, 32, 32)

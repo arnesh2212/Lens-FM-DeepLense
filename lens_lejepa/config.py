@@ -96,6 +96,7 @@ class FinetuneConfig:
     lr: float = 3e-4
     weight_decay: float = 0.01
     label_smoothing: float = 0.1           # classification only
+    train_jitter: int = 0                  # classification only: random +-N native-pixel shifts of training images
     val_interval: int = 10
     bf16: bool = True
     seed: int = 42

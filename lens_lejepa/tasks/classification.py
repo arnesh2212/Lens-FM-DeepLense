@@ -23,12 +23,16 @@ class ClassificationTask(Task):
 
     def build_datasets(self):
         c = self.config
-        dataset = LensClassificationDataset(f"{c.data_root}/{c.train_dataset}", c.image_size, cache=c.cache, distortion=self.needs_distortion)
+        root = f"{c.data_root}/{c.train_dataset}"
+        dataset = LensClassificationDataset(root, c.image_size, cache=c.cache, distortion=self.needs_distortion)
+        train_dataset = dataset
+        if c.train_jitter > 0:  # shifted copies for training only; validation stays centred
+            train_dataset = LensClassificationDataset(root, c.image_size, cache=c.cache, distortion=self.needs_distortion, jitter=c.train_jitter)
         if c.shots is None:
             train_idx, val_idx = stratified_split(dataset.labels, c.train_fraction, c.seed)
         else:
             train_idx, val_idx = few_shot_split(dataset.labels, c.shots, c.val_fraction, c.seed)
-        return Subset(dataset, train_idx.tolist()), Subset(dataset, val_idx.tolist())
+        return Subset(train_dataset, train_idx.tolist()), Subset(dataset, val_idx.tolist())
 
     def build_test_dataset(self, root: str):
         return LensClassificationDataset(root, self.config.image_size, cache=self.config.cache, distortion=self.needs_distortion)

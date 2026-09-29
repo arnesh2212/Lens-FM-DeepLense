@@ -62,6 +62,16 @@ def load_axion_image_and_log_mass(path: str | Path) -> tuple[np.ndarray, float]:
     return (image[None] if image.ndim == 2 else image), float(np.log10(mass))
 
 
+def shift_image(image: np.ndarray, dy: int, dx: int) -> np.ndarray:
+    """Translate ``[C, H, W]`` by whole pixels; uncovered pixels get the image minimum."""
+    out = np.full_like(image, image.min())
+    h, w = image.shape[-2:]
+    ys, yd = (slice(0, h - dy), slice(dy, h)) if dy >= 0 else (slice(-dy, h), slice(0, h + dy))
+    xs, xd = (slice(0, w - dx), slice(dx, w)) if dx >= 0 else (slice(-dx, w), slice(0, w + dx))
+    out[..., yd, xd] = image[..., ys, xs]
+    return out
+
+
 def minmax_normalise(image: np.ndarray) -> np.ndarray:
     """Average channels to one and rescale each image to ``[0, 1]``.
 

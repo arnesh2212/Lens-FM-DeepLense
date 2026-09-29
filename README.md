@@ -39,13 +39,15 @@ Held-out test sets, single seed, frozen ViT-S/16 encoder pretrained for 100 epoc
 
 | | Regression MAE (dex) ↓ M-II / M-III | Synthetic 2x SR PSNR (dB) ↑ M-II / M-III |
 |---|---:|---:|
-| LeJEPA + LoRA | 0.121 / 0.122 | **48.32 / 45.38** |
+| LeJEPA + LoRA | 0.121 / 0.122 | 48.32 / 45.38 |
 | Lens-LeJEPA + LoRA | 0.149 / 0.109 | 44.70 / 42.50 |
 | Lens-LeJEPA + rsLoRA | 0.100 / 0.090 | – |
 | ResNet18, supervised | **0.021 / 0.019** | – |
-| Bicubic / RCAN (same budget) | – | 41.07 / 40.27 · 19.49 / 19.01 |
+| RCAN, supervised (same budget) | – | **65.12 / 61.41** |
+| Bicubic | – | 41.07 / 40.27 |
 
 The priors help classification most when labels are scarce and hurt reconstruction; see the paper's discussion.
+Supervised models trained from scratch remain best at full data on all three tasks.
 Loading the original checkpoints into this code reproduces these held-out numbers exactly
 (0.9768 accuracy, 0.1001 dex, 44.70 dB).
 
@@ -145,7 +147,7 @@ loading the original checkpoints reproduces the reported held-out numbers.
 | `vitsd` | supervised ViT with shifted patches + locality attention | classification | 0.8960 → 0.8960 |
 | `lensiformer` | supervised physics-informed ViT (image + distortion map) | classification | 0.9820 → 0.9821 |
 | `lenspinn` | supervised physics-informed CNN (image + distortion map) | classification, regression | 0.9997 → 0.9997 |
-| `rcan` | supervised 2x super-resolution CNN | super-resolution | see note below |
+| `rcan`, `edsr`, `rdn`, `srresnet`, `fsrcnn` | supervised 2x super-resolution CNNs | super-resolution | RCAN 65.12 dB (after the fix below) |
 | `bicubic` | interpolation | super-resolution | 41.07 dB → 41.07 dB |
 | `vit_base_3blocks` | I-JEPA reference encoder (21.5M), `method: ijepa` | all (with adapters) | 0.9780 → 0.9780 (LoRA) |
 | `lens_jepa` | Lens-JEPA reference encoder (2.45M), `method: lens_jepa`, `lens_jepa_sym`, `lens_jepa_focus` | all (with adapters) | 0.8298 → 0.8309, Sym 0.8660 → 0.8670 (LoRA) |

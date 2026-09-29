@@ -17,7 +17,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from .io import bicubic, distortion_map, load_axion_image_and_log_mass, load_lens_image, minmax_normalise, to_model_tensor
+from .io import bicubic, distortion_map, shift_image, load_axion_image_and_log_mass, load_lens_image, minmax_normalise, to_model_tensor
 
 CLASSES: tuple[str, ...] = ("axion", "cdm", "no_sub")
 
@@ -64,10 +64,11 @@ class UnlabelledLensDataset(Dataset):
 class LensClassificationDataset(Dataset):
     """Three-class substructure classification (axion / CDM / no substructure)."""
 
-    def __init__(self, root: str | Path, image_size: int, cache: bool = False, distortion: bool = False) -> None:
+    def __init__(self, root: str | Path, image_size: int, cache: bool = False, distortion: bool = False, jitter: int = 0) -> None:
         self.paths, self.labels = list_class_files(root)
         self.image_size = image_size
         self.distortion = distortion
+        self.jitter = jitter  # random +-jitter native-pixel shift per item (training-time robustness only)
         self._cache = [load_lens_image(path) for path in self.paths] if cache else None
 
     def __len__(self) -> int:
@@ -75,6 +76,9 @@ class LensClassificationDataset(Dataset):
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
         image = self._cache[index] if self._cache is not None else load_lens_image(self.paths[index])
+        if self.jitter > 0:
+            dy, dx = torch.randint(-self.jitter, self.jitter + 1, (2,)).tolist()
+            image = shift_image(image, dy, dx)
         item = {
             "image": to_model_tensor(image, self.image_size, standardize=True),
             "label": torch.tensor(self.labels[index], dtype=torch.long),
