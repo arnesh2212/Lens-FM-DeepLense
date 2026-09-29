@@ -1,6 +1,6 @@
 # Lens-LeJEPA
 
-Code for **"The Einstein Radius Is Not an Augmentation: Geometry-Aware Pretraining for Dark Matter Substructure"**.
+Code for **"Lens-LeJEPA: Learning the Right Invariances for Strong Gravitational Lenses"**.
 
 Lens-LeJEPA pretrains a Vision Transformer on unlabelled strong-lensing images with the teacher-free
 [LeJEPA](https://arxiv.org/abs/2511.08544) objective plus two lensing priors, then freezes it and adapts it with
@@ -189,32 +189,14 @@ tests/                   unit and end-to-end tests
 
 * **Collapse guard.** Every pretraining epoch records pooled feature standard deviation and effective-rank fraction.
   Three consecutive epochs below `0.02` / `0.04` stop the run *before* a checkpoint is written, so a collapsed
-  encoder can never reach a downstream task. Neither paper run triggered it.
+  encoder can never reach a downstream task.
 * **Precision.** Training uses bfloat16 autocast; validation and test inference run in float32, so reported metrics
   do not depend on bf16 rounding.
-* **Checkpoints.** Parameter names match the original experiment code, so the paper's pretraining checkpoints load with
-  `strict=True` (`load_pretrained_encoder`). Downstream checkpoints store the model, the config and any task state (the
-  regression target normaliser), so `evaluate` needs nothing else.
-* **Super-resolution input.** Following the paper protocol, the encoder receives the upsampled low-resolution image in
-  `[0, 1]`, not the per-image standardised input used in pretraining. This is what the reported numbers use.
-* **Differences from the original research code**, none of which change a reported number: file lists are sorted
-  (the original used directory order, so train/validation membership could differ between machines; test sets are
-  unaffected), SSIM is averaged per image rather than per batch, attention uses
-  `scaled_dot_product_attention` (outputs agree to ~1e-5), and multi-GPU SIGReg reduction was removed (single-GPU only).
-* **RCAN.** An earlier version of the RCAN baseline ended in a sigmoid. On these mostly-black images it saturated
-  within about ten steps, its gradient became exactly zero, and the network was stuck predicting a black image
-  (19.5 dB). The output layer is now linear, as in the original RCAN, and predictions are clamped to `[0, 1]` at
-  evaluation.
 
-## Citation
 
-```bibtex
-@article{lenslejepa2026,
-  title  = {The Einstein Radius Is Not an Augmentation: Geometry-Aware Pretraining for Dark Matter Substructure},
-  year   = {2026},
-  note   = {Under review}
-}
-```
+
+
+
 
 ## Acknowledgements
 
